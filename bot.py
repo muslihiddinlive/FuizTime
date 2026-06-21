@@ -830,12 +830,13 @@ async def show_delete_list(query, ctx, topic):
 
 def request_view_text(r: dict) -> str:
     uname = f"@{r.get('username')}" if r.get("username") else ""
+    status_text = "🆕 Yangi" if r.get("status") == "new" else "✅ Ko'rilgan"
     return (
         f"📩 <b>Murojaat</b>\n"
         f"👤 {r.get('name','')} {uname}\n"
         f"🆔 <code>{r.get('uid')}</code>\n"
         f"🗓 {r.get('date','')}\n"
-        f"📊 Status: {'🆕 Yangi' if r.get('status')=='new' else '✅ Ko\'rilgan'}\n\n"
+        f"📊 Status: {status_text}\n\n"
         f"{r.get('text','')}"
     )
 
