@@ -250,12 +250,14 @@ def superadmin_menu_kb(bot_data: dict):
     coins_on  = feature_on(bot_data, "coins")
     refs_on   = feature_on(bot_data, "referrals")
     promos_on = feature_on(bot_data, "promocodes")
+    on_txt  = "✅ Yoqiq"
+    off_txt = "❌ O'chirilgan"
     return kb(
-        [btn(f"💰 FuizCoin: {'✅ Yoqiq' if coins_on else '❌ O\'chirilgan'}",
+        [btn(f"💰 FuizCoin: {on_txt if coins_on else off_txt}",
              "sa:toggle:coins")],
-        [btn(f"👥 Referal: {'✅ Yoqiq' if refs_on else '❌ O\'chirilgan'}",
+        [btn(f"👥 Referal: {on_txt if refs_on else off_txt}",
              "sa:toggle:referrals")],
-        [btn(f"🎁 Promokod: {'✅ Yoqiq' if promos_on else '❌ O\'chirilgan'}",
+        [btn(f"🎁 Promokod: {on_txt if promos_on else off_txt}",
              "sa:toggle:promocodes")],
         [btn("💰 Coin berish",   "adm:coin:give"),
          btn("📊 Balanslar",     "adm:coin:balances")],
