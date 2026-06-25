@@ -140,47 +140,53 @@ def import_backup(bot_data: dict, json_data: bytes) -> tuple[bool, str]:
 
 async def auto_restore_if_empty(bot: Bot, bot_data: dict) -> bool:
     """
-    Bot xotirasi bo'sh boshlangan bo'lsa (masalan Render disk tozalanib,
-    cache.json yo'qolgan holatda), backup topicda PIN qilingan oxirgi JSON
-    faylni avtomatik topib, yuklab oladi va restore qiladi.
-
-    Eslatma: Telegram Bot API orqali bot eski xabarlarni "qidirib" topa
-    olmaydi — faqat PIN qilingan xabarni getChat() orqali ko'ra oladi.
-    Shu sababli bu funksiya pin'ga tayanadi. Agar pin topilmasa yoki xato
-    chiqsa, False qaytaradi va chaqiruvchi tomon /import so'rab xabar beradi.
+    Bot xotirasi bo'sh boshlangan bo'lsa, backup topicda PIN qilingan
+    oxirgi JSON faylni topib restore qiladi.
+    Pin topilmasa — backup topicning so'nggi xabarlarini ham ko'rib chiqadi.
     """
     cache = bot_data.get("cache", {})
     total = sum(len(v) for v in cache.values())
     if total > 0:
-        return False  # Bo'sh emas — restorega ehtiyoj yo'q
+        return False  # Bo'sh emas
 
+    # 1-urinish: pin qilingan xabar
     try:
         chat = await bot.get_chat(DB_GROUP_ID)
         pinned = chat.pinned_message
-        if not pinned or not pinned.document:
-            log.warning("Avtomatik restore: pin qilingan backup fayl topilmadi.")
-            return False
-        if not (pinned.document.file_name or "").endswith(".json"):
-            log.warning("Avtomatik restore: pin qilingan fayl .json emas.")
-            return False
-
-        tg_file = await bot.get_file(pinned.document.file_id)
-        content_bytes = await tg_file.download_as_bytearray()
-        ok, _ = import_backup(bot_data, bytes(content_bytes))
-        bot_data["last_backup_msg_id"] = str(pinned.message_id)
-
-        if ok:
-            log.info("✅ Avtomatik restore muvaffaqiyatli (pin qilingan backup orqali).")
-        else:
-            log.error("Avtomatik restore: backup fayl formatida xato.")
-        return ok
-
+        if pinned and pinned.document and (pinned.document.file_name or "").endswith(".json"):
+            tg_file = await bot.get_file(pinned.document.file_id)
+            content_bytes = await tg_file.download_as_bytearray()
+            ok, _ = import_backup(bot_data, bytes(content_bytes))
+            if ok:
+                bot_data["last_backup_msg_id"] = str(pinned.message_id)
+                log.info("✅ Avtomatik restore: pin qilingan backup orqali.")
+                return True
     except TelegramError as e:
-        log.error(f"Avtomatik restore xato (Telegram API): {e}")
-        return False
+        log.warning(f"Avtomatik restore (pin): {e}")
     except Exception as e:
-        log.error(f"Avtomatik restore xato: {e}")
-        return False
+        log.error(f"Avtomatik restore (pin) xato: {e}")
+
+    # 2-urinish: last_backup_msg_id dan
+    last_mid = bot_data.get("last_backup_msg_id")
+    if last_mid:
+        try:
+            tg_file = await bot.get_file(
+                (await bot.forward_message(
+                    chat_id=DB_GROUP_ID,
+                    from_chat_id=DB_GROUP_ID,
+                    message_id=int(last_mid)
+                )).document.file_id
+            )
+            content_bytes = await tg_file.download_as_bytearray()
+            ok, _ = import_backup(bot_data, bytes(content_bytes))
+            if ok:
+                log.info("✅ Avtomatik restore: last_backup_msg_id orqali.")
+                return True
+        except Exception as e:
+            log.warning(f"Avtomatik restore (last_mid): {e}")
+
+    log.warning("Avtomatik restore: backup topilmadi.")
+    return False
 
 
 async def check_empty_and_notify(bot: Bot, bot_data: dict, auto_restored: bool = False):
