@@ -1,6 +1,7 @@
 """FuizTime Bot — Config"""
 
-BOT_TOKEN = "8634089477:AAEwGEXJLTSMN73gRBBl0-vFMrNRAKa0_Fs"
+import os
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 SUPERADMIN = 5302627260
 ADMIN_IDS: list[int] = []
