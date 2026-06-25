@@ -3,6 +3,7 @@ FuizTime DB layer — Telegram Supergroup Topics as database.
 Har bir record = bitta Telegram xabari.
 Format: KEY:value satrlari, BODY: dan keyin erkin matn.
 """
+import asyncio
 import logging
 from datetime import datetime
 from telegram import Bot
@@ -13,7 +14,7 @@ log = logging.getLogger("FuizDB")
 
 # ── Serialization ──────────────────────────────────────────────────────────
 
-SKIP_KEYS = {"_msg_id", "_id"}  # Telegram ga yozilmaydigan kalitlar
+SKIP_KEYS = {"_msg_id", "_id"}
 
 def _serialize(data: dict) -> str:
     lines = []
@@ -42,7 +43,6 @@ def _deserialize(text: str) -> dict:
 # ── Low-level DB ops ───────────────────────────────────────────────────────
 
 async def db_write(bot: Bot, topic: str, data: dict, msg_id: int = None) -> int | None:
-    """Write or update a record. Returns message_id."""
     thread_id = TOPIC_IDS.get(topic)
     if not thread_id:
         log.error(f"Unknown topic: {topic}")
@@ -69,7 +69,6 @@ async def db_write(bot: Bot, topic: str, data: dict, msg_id: int = None) -> int 
         return None
 
 async def db_delete(bot: Bot, msg_id: int) -> bool:
-    """Delete a record from DB group."""
     try:
         await bot.delete_message(chat_id=DB_GROUP_ID, message_id=msg_id)
         return True
@@ -77,7 +76,7 @@ async def db_delete(bot: Bot, msg_id: int) -> bool:
         log.warning(f"db_delete({msg_id}) error: {e}")
         return False
 
-# ── Cache helpers (in-memory, per bot_data) ────────────────────────────────
+# ── Cache helpers ──────────────────────────────────────────────────────────
 
 def cache_get(bot_data: dict, topic: str) -> list:
     return bot_data.setdefault("cache", {}).setdefault(topic, [])
@@ -105,10 +104,36 @@ def cache_remove(bot_data: dict, topic: str, msg_id: str | int):
     c = cache_get(bot_data, topic)
     bot_data["cache"][topic] = [r for r in c if str(r.get("_msg_id")) != str(msg_id)]
 
+# ── Debounce backup ────────────────────────────────────────────────────────
+# Har o'zgarishda 5 soniya kutadi. Agar 5 soniya ichida yangi o'zgarish
+# kelsa — timer qayta boshlanadi. 00:00 daily backup dan mustaqil ishlaydi.
+
+_backup_task: asyncio.Task | None = None
+
+async def _debounce_backup(bot: Bot, bot_data: dict):
+    """5 soniya kutib, keyin backup qiladi."""
+    await asyncio.sleep(5)
+    try:
+        import backup as BK
+        await BK.export_backup(bot, bot_data)
+        log.info("📦 Debounce backup yuborildi (5 soniya harakatsizlikdan keyin).")
+    except Exception as e:
+        log.error(f"Debounce backup xato: {e}")
+
+async def _track_change(bot: Bot, bot_data: dict):
+    """Har bir o'zgarishda debounce backup ni qayta ishga tushiradi."""
+    global _backup_task
+
+    # Eski taskni bekor qil
+    if _backup_task and not _backup_task.done():
+        _backup_task.cancel()
+
+    # Yangi task boshlash
+    _backup_task = asyncio.create_task(_debounce_backup(bot, bot_data))
+
 # ── High-level helpers ─────────────────────────────────────────────────────
 
 async def save(bot: Bot, bot_data: dict, topic: str, record: dict) -> dict:
-    """Save new record to DB and cache. Returns record with _msg_id."""
     record.setdefault("_id", datetime.now().strftime("%Y%m%d%H%M%S%f")[:16])
     msg_id = await db_write(bot, topic, record)
     if msg_id:
@@ -118,7 +143,6 @@ async def save(bot: Bot, bot_data: dict, topic: str, record: dict) -> dict:
     return record
 
 async def update(bot: Bot, bot_data: dict, topic: str, record: dict) -> bool:
-    """Update existing record."""
     msg_id = record.get("_msg_id")
     if not msg_id:
         return False
@@ -130,27 +154,8 @@ async def update(bot: Bot, bot_data: dict, topic: str, record: dict) -> bool:
     return False
 
 async def delete(bot: Bot, bot_data: dict, topic: str, msg_id: str | int) -> bool:
-    """Delete record from DB and cache."""
     ok = await db_delete(bot, int(msg_id))
     cache_remove(bot_data, topic, msg_id)
     if ok:
         await _track_change(bot, bot_data)
     return ok
-
-# ── AUTO-BACKUP: har N o'zgarishdan keyin to'liq backup ────────────────────
-
-CHANGE_LIMIT = 4
-
-async def _track_change(bot: Bot, bot_data: dict):
-    """Har bir muvaffaqiyatli yozish/tahrirlash/o'chirishni hisoblaydi.
-    CHANGE_LIMIT ga yetganda avtomatik to'liq backup yuboradi va hisoblagichni
-    nolga qaytaradi."""
-    bot_data["change_counter"] = bot_data.get("change_counter", 0) + 1
-    if bot_data["change_counter"] >= CHANGE_LIMIT:
-        bot_data["change_counter"] = 0
-        try:
-            import backup as BK  # lokal import — aylanma import'dan saqlanish uchun
-            await BK.export_backup(bot, bot_data)
-            log.info(f"📦 Avtomatik backup: {CHANGE_LIMIT} o'zgarishdan keyin yuborildi.")
-        except Exception as e:
-            log.error(f"Avtomatik backup (o'zgarish hisoblagichi) xato: {e}")
